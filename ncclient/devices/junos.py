@@ -71,6 +71,34 @@ class JunosDeviceHandler(DefaultDeviceHandler):
         else:
             return False
 
+    def get_ssh_subsystem_names(self):
+        """
+        Return a list of names to try for the SSH subsystems.
+
+        This always returns a list, even if only a single subsystem name is used.
+
+        If the returned list contains multiple names then the various subsystems are
+        tried in order, until one of them can successfully connect.
+
+        """
+        if 'target' in self.device_params:
+            # when connecting to FPC directly, netconf subsystem should not
+            # be used. Handle connection will take care of making
+            # appropriate channel
+            return []
+        else:
+            return ["netconf"]
+
+    def handle_connection(self, sshsession):
+        if 'target' in self.device_params:
+            c = sshsession._channel = sshsession._transport.open_channel(
+                kind="session")
+            c.set_name("fpc-netconf-command-" + str(sshsession._channel_id))
+            c.exec_command('rsh -Ji {} cli -c "netconf"\n'.format(
+                self.device_params['target']))
+            return True
+        return False
+
     def handle_connection_exceptions(self, sshsession):
         c = sshsession._channel = sshsession._transport.open_channel(kind="session")
         c.set_name("netconf-command-" + str(sshsession._channel_id))

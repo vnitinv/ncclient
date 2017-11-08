@@ -444,6 +444,11 @@ class SSHSession(Session):
             self._channel_name = c.get_name()
             self._post_connect()
             return
+        else:
+            if self._device_handler.handle_connection(self):
+                self._channel_name = self._channel.get_name()
+                self._post_connect()
+                return
         raise SSHError("Could not open connection, possibly due to unacceptable"
                        " SSH subsystem name.")
 
