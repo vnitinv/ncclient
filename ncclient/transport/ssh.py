@@ -35,6 +35,7 @@ import paramiko
 from ncclient.transport.errors import AuthenticationError, SessionCloseError, SSHError, SSHUnknownHostError, NetconfFramingError
 from ncclient.transport.session import Session
 from ncclient.transport.session import NetconfBase
+from ncclient.xml_ import *
 
 import logging
 logger = logging.getLogger("ncclient.transport.ssh")
@@ -60,6 +61,7 @@ TICK = 0.1
 # * result.group(2) will be defined if '##' found
 #
 RE_NC11_DELIM = re.compile(r'\n(?:#([0-9]+)|(##))\n')
+
 
 
 def default_unknown_host_cb(host, fingerprint):
@@ -124,6 +126,7 @@ class SSHSession(Session):
         self._size_num_list = []
         self._message_list = []
         self._closing = threading.Event()
+        self._usesax = False
 
         self.logger = SessionLoggerAdapter(logger, {'session': self})
 
@@ -461,7 +464,6 @@ class SSHSession(Session):
 
         self._connected = True      # there was no error authenticating
         self._closing.clear()
-
         # TODO: leopoul: Review, test, and if needed rewrite this part
         subsystem_names = self._device_handler.get_ssh_subsystem_names()
         for subname in subsystem_names:
@@ -570,6 +572,7 @@ class SSHSession(Session):
             s = selectors.DefaultSelector()
             s.register(chan, selectors.EVENT_READ)
             self.logger.debug('selector type = %s', s.__class__.__name__)
+            olddata = ''
             while True:
 
                 # Will wakeup evey TICK seconds to check if something
@@ -579,12 +582,25 @@ class SSHSession(Session):
                 if events:
                     data = chan.recv(BUF_SIZE)
                     if data:
-                        self._buffer.seek(0, os.SEEK_END)
-                        self._buffer.write(data)
-                        if self._base == NetconfBase.BASE_11:
-                            self._parse11()
+                        if self._usesax:
+                            cdata = olddata + data.decode()
+                            if "]]>]]>" in cdata:
+                                self.parser.feed(data[:len(data) - len("]]>]]>") - 1])
+                                self._buffer.seek(0, os.SEEK_END)
+                                self._buffer.write(str.encode("]]>]]>"))
+                                self._parse10()
+                                self._usesax = False
+                            else:
+                                self.parser.feed(data)
+                            olddata = data.decode()
                         else:
-                            self._parse10()
+                            self._buffer.seek(0, os.SEEK_END)
+                            self._buffer.write(data)
+                            if self._base == NetconfBase.BASE_11:
+                                self._parse11()
+                            else:
+                                self._parse10()
+
                     elif self._closing.is_set():
                         # End of session, expected
                         break

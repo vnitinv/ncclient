@@ -15,16 +15,18 @@
 from threading import Event, Lock
 from uuid import uuid4
 import six
+import time
+from xml.sax import make_parser
 
 from ncclient.xml_ import *
 from ncclient.logging_ import SessionLoggerAdapter
 from ncclient.transport import SessionListener
 
 from ncclient.operations.errors import OperationError, TimeoutExpiredError, MissingCapabilityError
+from ncclient.operations.parser import SAXParser
 
 import logging
 logger = logging.getLogger("ncclient.operations.rpc")
-
 
 class RPCError(OperationError):
 
@@ -306,7 +308,7 @@ class RPC(object):
         #print to_xml(ele)
         return to_xml(ele)
 
-    def _request(self, op):
+    def _request(self, op, sax_parser_ingest=None):
         """Implementations of :meth:`request` call this method to send the request and process the reply.
 
         In synchronous mode, blocks until the reply is received and returns :class:`RPCReply`. Depending on the :attr:`raise_mode` a `rpc-error` element in the reply may lead to an :exc:`RPCError` exception.
@@ -316,6 +318,13 @@ class RPC(object):
         *op* is the operation to be requested as an :class:`~xml.etree.ElementTree.Element`
         """
         self.logger.info('Requesting %r', self.__class__.__name__)
+        self._session._usesax = sax_parser_ingest is not None
+        if self._session._usesax:
+            self._session.parser = make_parser()
+            # xmlstring = "<rpc-reply><interface-information><physical-interface><logical-interface><name></name><snmp-index></snmp-index><local-index></local-index></logical-interface></physical-interface></interface-information></rpc-reply>"
+            # xmlstring = "<rpc-reply><interface-information><physical-interface><name></name><admin-status></admin-status><oper-status></oper-status><traffic-statistics><input-pps></input-pps><output-pps></output-pps><input-bps></input-bps><output-bps></output-bps></traffic-statistics><logical-interface><name></name><transit-traffic-statistics><input-bps></input-bps><input-pps></input-pps><output-bps></output-bps><output-pps></output-pps></transit-traffic-statistics></logical-interface></physical-interface></interface-information></rpc-reply>"
+            self._session.parser.setContentHandler(SAXParser(sax_parser_ingest, self._session))
+
         req = self._wrap(op)
         self._session.send(req)
         if self._async:
@@ -328,7 +337,11 @@ class RPC(object):
                 if self._error:
                     # Error that prevented reply delivery
                     raise self._error
+
+                st = time.time()
+                print('parse starting at %s'%time.ctime())
                 self._reply.parse()
+                print('parse ended at %s, total time taken %s' % (time.ctime(), time.time()-st))
                 if self._reply.error is not None and not self._device_handler.is_rpc_error_exempt(self._reply.error.message):
                     # <rpc-error>'s [ RPCError ]
 
@@ -340,7 +353,12 @@ class RPC(object):
                         else:
                             raise self._reply.error
                 if self._device_handler.transform_reply():
+                    # st = time.time()
+                    # print('transform_reply starting at %s' % time.ctime())
                     return NCElement(self._reply, self._device_handler.transform_reply())
+                    # print('transform_reply ended at %s, total time taken %s' % (
+                    #     time.ctime(), time.time() - st))
+                    # return ret
                 else:
                     return self._reply
             else:

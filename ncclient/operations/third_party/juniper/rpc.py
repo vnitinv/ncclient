@@ -40,13 +40,13 @@ class CompareConfiguration(RPC):
         return self._request(node)
 
 class ExecuteRpc(RPC):
-    def request(self, rpc):
+    def request(self, rpc, sax_parser_ingest=None):
         if isinstance(rpc, str):
             rpc = to_ele(rpc)
-        return self._request(rpc)
+        return self._request(rpc, sax_parser_ingest)
 
 class Command(RPC):
-    def request(self, command=None, format='xml'):
+    def request(self, command=None, format='xml', sax_parser_ingest=None):
         node = new_ele('command', {'format':format})
         node.text = command
         return self._request(node)
