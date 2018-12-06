@@ -15,16 +15,16 @@ def __dict_replace(s, d):
     return s
 
 
-def _get_sax_parser_root(xmlstring):
+def _get_sax_parser_root(xml):
     """
     This function does some validation and rule check of xmlstring
-    :param xmlstring: string or object to be used in parsing reply
+    :param xml: string or object to be used in parsing reply
     :return: lxml object
     """
-    if isinstance(xmlstring, etree._Element):
-        root = xmlstring
+    if isinstance(xml, etree._Element):
+        root = xml
     else:
-        root = etree.fromstring(xmlstring)
+        root = etree.fromstring(xml)
     return root
 
 
@@ -70,9 +70,9 @@ def quoteattr(data, entities={}):
 
 
 class SAXParser(ContentHandler):
-    def __init__(self, xmlstring, session):
+    def __init__(self, xml, session):
         ContentHandler.__init__(self)
-        self._root = _get_sax_parser_root(xmlstring)
+        self._root = _get_sax_parser_root(xml)
         self._cur = self._root
         self._currenttag = None
         self._ignoretag = None
@@ -95,10 +95,14 @@ class SAXParser(ContentHandler):
         if self._validate_reply_and_sax_tag:
             if tag != self._root.tag:
                 self._write_buffer(tag, format_str='<{}>\n')
+                self._cur = E(tag, self._cur)
+            else:
+                self._write_buffer(tag, format_str='<{}{}>', **attributes)
+                self._cur = node
+                self._currenttag = tag
             self._validate_reply_and_sax_tag = False
             self._defaulttags.append(tag)
-
-        if node is not None:
+        elif node is not None:
             self._write_buffer(tag, format_str='<{}{}>', **attributes)
             self._cur = node
             self._currenttag = tag
