@@ -40,6 +40,7 @@ from ncclient.transport.session import NetconfBase
 from ncclient.xml_ import *
 
 from ncclient.operations.parser import SAXParser
+from xml.sax import make_parser
 
 import logging
 logger = logging.getLogger("ncclient.transport.ssh")
@@ -588,16 +589,9 @@ class SSHSession(Session):
                     if data:
                         if self._usesax:
                             try:
-                                # print ('got: ', data)
                                 self.parser.feed(data)
                             except SAXParseException:
-                                try:
-                                    self._delimiter_check(data)
-                                except:
-                                    # buf = self._buffer
-                                    # buf.seek(0)
-                                    # print(buf.read().decode())
-                                    print (data)
+                                self._delimiter_check(data)
                             finally:
                                 if self._base == NetconfBase.BASE_11:
                                     self._parse11()
@@ -636,25 +630,33 @@ class SSHSession(Session):
 
     def _delimiter_check(self, data):
 
-        """Messages are delimited by MSG_DELIM. The buffer could have grown by
+        """Messages are delimited by delimiter. The buffer could have grown by
         a maximum of BUF_SIZE bytes everytime this method is called. Retains
         state across method calls and if a chunk has been read it will not be
         considered again."""
-        # buf = self._buffer
-        # parsing_pos = buf.tell() - MSG_DELIM_LEN
-        # buf.seek(parsing_pos)
         data = data.decode('UTF-8')
         if MSG_DELIM in data:
-            print('data', data)
             msg, delim, remaining = data.partition(MSG_DELIM)
             self._buffer.seek(0, os.SEEK_END)
             self._buffer.write((delim+remaining).encode())
-            # self.parser = make_parser()
-            # self.parser.setContentHandler(SAXParser('', self._session))
-            self.parser.feed(remaining)
+            # we need to renew parser
+            self.parser = make_parser()
+            self.parser.setContentHandler(SAXParser(None, self))
+            if remaining.strip() != '':
+                self.parser.feed(remaining)
         else:
-            print('yet to receive full data', data)
-
+            print ("else part", data)
+            RPC_REPLY = "</rpc-reply>"
+            RPC_REPLY_LEN = len(RPC_REPLY)
+            buf = self._buffer
+            buf.seek(buf.tell() - RPC_REPLY_LEN)
+            if RPC_REPLY in buf.read().decode('UTF-8'):
+                msg, delim, remaining = data.partition(RPC_REPLY)
+                self._buffer.seek(0, os.SEEK_END)
+                self._buffer.write(remaining.encode())
+            else:
+                # need to check when we can hit this case.
+                pass
     @property
     def host(self):
         """Host this session is connected to, or None if not connected."""

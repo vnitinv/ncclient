@@ -156,7 +156,7 @@ class SAXParser(ContentHandler):
         #     self._write_buffer(content, format_str='{}')
 
     def _write_buffer(self, content, format_str, **kwargs):
-        print (content, format_str, kwargs)
+        # print (content, format_str, kwargs)
         self._session._buffer.seek(0, os.SEEK_END)
         attrs = ''
         for (name, value) in kwargs.items():
