@@ -17,13 +17,14 @@ from uuid import uuid4
 import six
 import time
 from xml.sax import make_parser
+# from ncclient.operations.parser import XMLErrorHandler
 
 from ncclient.xml_ import *
 from ncclient.logging_ import SessionLoggerAdapter
 from ncclient.transport import SessionListener
 
 from ncclient.operations.errors import OperationError, TimeoutExpiredError, MissingCapabilityError
-from ncclient.operations.parser import SAXParser
+from ncclient.operations.parser import SAXParser, XMLErrorHandler
 
 import logging
 logger = logging.getLogger("ncclient.operations.rpc")
@@ -268,7 +269,6 @@ class RPC(object):
     REPLY_CLS = RPCReply
     "By default :class:`RPCReply`. Subclasses can specify a :class:`RPCReply` subclass."
 
-
     def __init__(self, session, device_handler, async_mode=False, timeout=30, raise_mode=RaiseMode.NONE):
         """
         *session* is the :class:`~ncclient.transport.Session` instance
@@ -305,7 +305,6 @@ class RPC(object):
         ele = new_ele("rpc", {"message-id": self._id},
                       **self._device_handler.get_xml_extra_prefix_kwargs())
         ele.append(subele)
-        #print to_xml(ele)
         return to_xml(ele)
 
     def _request(self, op, filter_xml=None):
@@ -318,13 +317,16 @@ class RPC(object):
         *op* is the operation to be requested as an :class:`~xml.etree.ElementTree.Element`
         """
         self.logger.info('Requesting %r', self.__class__.__name__)
-        self._session._usesax = filter_xml is not None
-        if self._session._usesax:
-            self._session.parser = make_parser()
-            self._session.parser.setContentHandler(SAXParser(filter_xml, self._session))
+        # self._session._usesax = filter_xml is not None
+
+        # self._session.parser = make_parser()
+        self._session.parser.setContentHandler(SAXParser(filter_xml, self._session))
+        # self._session.parser.setErrorHandler(XMLErrorHandler(self._session))
 
         req = self._wrap(op)
         self._session.send(req)
+        st = time.time()
+        print('RPC sent at %s' % time.ctime())
         if self._async:
             self.logger.debug('Async request, returning %r', self)
             return self
@@ -335,7 +337,7 @@ class RPC(object):
                 if self._error:
                     # Error that prevented reply delivery
                     raise self._error
-
+                print('rpc reply rcv ended at %s, total time taken %s' % (time.ctime(), time.time() - st))
                 st = time.time()
                 print('parse starting at %s'%time.ctime())
                 self._reply.parse()

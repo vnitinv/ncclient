@@ -27,6 +27,8 @@ try:
 except ImportError:
     import selectors2 as selectors
 
+from xml.sax._exceptions import SAXParseException
+
 from ncclient.capabilities import Capabilities
 from ncclient.logging_ import SessionLoggerAdapter
 
@@ -36,6 +38,8 @@ from ncclient.transport.errors import AuthenticationError, SessionCloseError, SS
 from ncclient.transport.session import Session
 from ncclient.transport.session import NetconfBase
 from ncclient.xml_ import *
+
+from ncclient.operations.parser import SAXParser
 
 import logging
 logger = logging.getLogger("ncclient.transport.ssh")
@@ -483,6 +487,7 @@ class SSHSession(Session):
                     continue
             self._channel_name = self._channel.get_name()
             self._post_connect()
+            self._usesax = True
             return
         raise SSHError("Could not open connection, possibly due to unacceptable"
                        " SSH subsystem name.")
@@ -572,7 +577,6 @@ class SSHSession(Session):
             s = selectors.DefaultSelector()
             s.register(chan, selectors.EVENT_READ)
             self.logger.debug('selector type = %s', s.__class__.__name__)
-            olddata = ''
             while True:
 
                 # Will wakeup evey TICK seconds to check if something
@@ -583,16 +587,22 @@ class SSHSession(Session):
                     data = chan.recv(BUF_SIZE)
                     if data:
                         if self._usesax:
-                            cdata = olddata + data.decode()
-                            if "]]>]]>" in cdata:
-                                self.parser.feed(data[:len(data) - len("]]>]]>") - 1])
-                                self._buffer.seek(0, os.SEEK_END)
-                                self._buffer.write(str.encode("]]>]]>"))
-                                self._parse10()
-                                self._usesax = False
-                            else:
+                            try:
+                                # print ('got: ', data)
                                 self.parser.feed(data)
-                            olddata = data.decode()
+                            except SAXParseException:
+                                try:
+                                    self._delimiter_check(data)
+                                except:
+                                    # buf = self._buffer
+                                    # buf.seek(0)
+                                    # print(buf.read().decode())
+                                    print (data)
+                            finally:
+                                if self._base == NetconfBase.BASE_11:
+                                    self._parse11()
+                                else:
+                                    self._parse10()
                         else:
                             self._buffer.seek(0, os.SEEK_END)
                             self._buffer.write(data)
@@ -600,7 +610,6 @@ class SSHSession(Session):
                                 self._parse11()
                             else:
                                 self._parse10()
-
                     elif self._closing.is_set():
                         # End of session, expected
                         break
@@ -624,6 +633,27 @@ class SSHSession(Session):
             self.logger.debug("Broke out of main loop, error=%r", e)
             self._dispatch_error(e)
             self.close()
+
+    def _delimiter_check(self, data):
+
+        """Messages are delimited by MSG_DELIM. The buffer could have grown by
+        a maximum of BUF_SIZE bytes everytime this method is called. Retains
+        state across method calls and if a chunk has been read it will not be
+        considered again."""
+        # buf = self._buffer
+        # parsing_pos = buf.tell() - MSG_DELIM_LEN
+        # buf.seek(parsing_pos)
+        data = data.decode('UTF-8')
+        if MSG_DELIM in data:
+            print('data', data)
+            msg, delim, remaining = data.partition(MSG_DELIM)
+            self._buffer.seek(0, os.SEEK_END)
+            self._buffer.write((delim+remaining).encode())
+            # self.parser = make_parser()
+            # self.parser.setContentHandler(SAXParser('', self._session))
+            self.parser.feed(remaining)
+        else:
+            print('yet to receive full data', data)
 
     @property
     def host(self):
