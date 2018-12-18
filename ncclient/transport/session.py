@@ -28,9 +28,6 @@ from ncclient.logging_ import SessionLoggerAdapter
 from ncclient.transport.errors import TransportError, SessionError
 from ncclient.transport.notify import Notification
 
-from xml.sax import make_parser
-from ncclient.operations.parser import SAXParser
-
 logger = logging.getLogger('ncclient.transport.session')
 
 
@@ -61,8 +58,6 @@ class Session(Thread):
         self.logger.debug('%r created: client_capabilities=%r',
                           self, self._client_capabilities)
         self._device_handler = None # Should be set by child class
-        self.parser = make_parser()
-        # self.parser.setContentHandler(SAXParser(filter_xml, self._session))
 
     def _dispatch_message(self, raw):
         try:

@@ -132,6 +132,8 @@ class SSHSession(Session):
         self._message_list = []
         self._closing = threading.Event()
         self._usesax = False
+        self.parser = make_parser()
+        self.parser.setContentHandler(SAXParser(self))
 
         self.logger = SessionLoggerAdapter(logger, {'session': self})
 
@@ -488,6 +490,7 @@ class SSHSession(Session):
                     continue
             self._channel_name = self._channel.get_name()
             self._post_connect()
+            # use SAX parsing login only after capabilities exchange
             self._usesax = True
             return
         raise SSHError("Could not open connection, possibly due to unacceptable"
@@ -641,7 +644,7 @@ class SSHSession(Session):
             self._buffer.write((delim+remaining).encode())
             # we need to renew parser
             self.parser = make_parser()
-            self.parser.setContentHandler(SAXParser(None, self))
+            self.parser.setContentHandler(SAXParser(self))
             if remaining.strip() != '':
                 self.parser.feed(remaining)
         else:

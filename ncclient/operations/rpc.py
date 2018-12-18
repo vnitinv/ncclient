@@ -16,15 +16,12 @@ from threading import Event, Lock
 from uuid import uuid4
 import six
 import time
-from xml.sax import make_parser
-# from ncclient.operations.parser import XMLErrorHandler
 
 from ncclient.xml_ import *
 from ncclient.logging_ import SessionLoggerAdapter
 from ncclient.transport import SessionListener
 
 from ncclient.operations.errors import OperationError, TimeoutExpiredError, MissingCapabilityError
-from ncclient.operations.parser import SAXParser, XMLErrorHandler
 
 import logging
 logger = logging.getLogger("ncclient.operations.rpc")
@@ -298,6 +295,7 @@ class RPC(object):
         self._event = Event()
         self._device_handler = device_handler
         self.logger = SessionLoggerAdapter(logger, {'session': session})
+        self._filter_xml = None
 
 
     def _wrap(self, subele):
@@ -317,11 +315,7 @@ class RPC(object):
         *op* is the operation to be requested as an :class:`~xml.etree.ElementTree.Element`
         """
         self.logger.info('Requesting %r', self.__class__.__name__)
-        # self._session._usesax = filter_xml is not None
-
-        # self._session.parser = make_parser()
-        self._session.parser.setContentHandler(SAXParser(filter_xml, self._session))
-        # self._session.parser.setErrorHandler(XMLErrorHandler(self._session))
+        self._filter_xml = filter_xml
 
         req = self._wrap(op)
         self._session.send(req)
