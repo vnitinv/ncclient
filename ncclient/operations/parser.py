@@ -96,6 +96,10 @@ class SAXParser(ContentHandler):
                 if rpc_reply_handler._filter_xml is not None:
                     self._cur = self._root = _get_sax_parser_root(rpc_reply_handler._filter_xml)
                     self._use_filter = True
+                else:
+                    # in case last rpc called used sax parsing and error'd out without resetting
+                    # use_filer in endElement rpc-reply check
+                    self._use_filter = False
         if self._use_filter:
             if self._ignoretag is not None:
                 return

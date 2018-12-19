@@ -641,18 +641,17 @@ class SSHSession(Session):
         if MSG_DELIM in data:
             msg, delim, remaining = data.partition(MSG_DELIM)
             self._buffer.seek(0, os.SEEK_END)
-            self._buffer.write((delim+remaining).encode())
+            self._buffer.write(delim.encode())
             # we need to renew parser
             self.parser = make_parser()
             self.parser.setContentHandler(SAXParser(self))
             if remaining.strip() != '':
                 self.parser.feed(remaining)
         else:
-            print ("else part", data)
             RPC_REPLY = "</rpc-reply>"
             RPC_REPLY_LEN = len(RPC_REPLY)
             buf = self._buffer
-            buf.seek(buf.tell() - RPC_REPLY_LEN)
+            buf.seek(buf.tell() - (RPC_REPLY_LEN+MSG_DELIM_LEN))
             if RPC_REPLY in buf.read().decode('UTF-8'):
                 msg, delim, remaining = data.partition(RPC_REPLY)
                 self._buffer.seek(0, os.SEEK_END)
