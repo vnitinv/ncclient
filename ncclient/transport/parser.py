@@ -17,196 +17,153 @@ import os
 import sys
 import re
 
+from threading import Lock
+
+from xml.sax.handler import ContentHandler
+from lxml import etree
+from lxml.builder import E
+from ncclient.operations import rpc
+
+import logging
+logger = logging.getLogger("ncclient.transport.third_party.junos.parser")
+
 try:
     import selectors
 except ImportError:
     import selectors2 as selectors
 
 
-from ncclient.transport.errors import NetconfFramingError
-from ncclient.transport.session import NetconfBase
-from ncclient.logging_ import SessionLoggerAdapter
-
-if sys.version < '3':
-    from six import StringIO
-else:
-    from io import BytesIO as StringIO
-
 import logging
 logger = logging.getLogger("ncclient.transport.parser")
 
-PORT_NETCONF_DEFAULT = 830
-PORT_SSH_DEFAULT = 22
 
-BUF_SIZE = 4096
-# v1.0: RFC 4742
-MSG_DELIM = "]]>]]>"
-MSG_DELIM_LEN = len(MSG_DELIM)
-# v1.1: RFC 6242
-END_DELIM = '\n##\n'
+class SAXParser(ContentHandler):
+    def __init__(self, filter_xml, buffer):
+        ContentHandler.__init__(self)
+        self._root = _get_sax_parser_root(filter_xml)
+        self._cur = self._root
+        self._currenttag = None
+        self._ignoretag = None
+        self._defaulttags = []
+        self._validate_reply_and_sax_tag = False
+        self._lock = Lock()
+        self._buffer = buffer
 
-TICK = 0.1
+    def startElement(self, tag, attributes):
+        if self._ignoretag is not None:
+            return
 
-#
-# Define delimiters for chunks and messages for netconf 1.1 chunk enoding.
-# When matched:
-#
-# * result.group(0) will contain whole matched string
-# * result.group(1) will contain the digit string for a chunk
-# * result.group(2) will be defined if '##' found
-#
-RE_NC11_DELIM = re.compile(r'\n(?:#([0-9]+)|(##))\n')
-
-if sys.version < '3':
-    def textify(buf):
-        return buf
-else:
-    def textify(buf):
-        return buf.decode('UTF-8')
-
-
-class DefaultXMLParser(object):
-
-    def __init__(self, session):
-        """
-        DOM Parser
-
-        :param session: ssh session object
-        """
-        self._session = session
-        self._parsing_pos10 = 0
-        self.logger = SessionLoggerAdapter(logger, {'session': self._session})
-
-    def parse(self, data):
-        """
-        parse incoming RPC response from networking device.
-
-        :param data: incoming RPC data from device
-        :return: None
-        """
-        if data:
-            self._session._buffer.seek(0, os.SEEK_END)
-            self._session._buffer.write(data)
-            if self._session._base == NetconfBase.BASE_11:
-                self._parse11()
-            else:
-                self._parse10()
-
-    def _parse10(self):
-
-        """Messages are delimited by MSG_DELIM. The buffer could have grown by
-        a maximum of BUF_SIZE bytes everytime this method is called. Retains
-        state across method calls and if a chunk has been read it will not be
-        considered again."""
-
-        self.logger.debug("parsing netconf v1.0")
-        buf = self._session._buffer
-        buf.seek(self._parsing_pos10)
-        if MSG_DELIM in buf.read().decode('UTF-8'):
-            buf.seek(0)
-            msg, _, remaining = buf.read().decode('UTF-8').partition(MSG_DELIM)
-            msg = msg.strip()
-            if sys.version < '3':
-                self._session._dispatch_message(msg.encode())
-            else:
-                self._session._dispatch_message(msg)
-            # create new buffer which contains remaining of old buffer
-            self._session._buffer = StringIO()
-            self._session._buffer.write(remaining.encode())
-            self._parsing_pos10 = 0
-            if len(remaining) > 0:
-                # There could be another entire message in the
-                # buffer, so we should try to parse again.
-                self.logger.debug('Trying another round of parsing since there is still data')
-                self._parse10()
+        if self._cur == self._root and self._cur.tag == tag:
+            node = self._root
         else:
-            # handle case that MSG_DELIM is split over two chunks
-            self._parsing_pos10 = buf.tell() - MSG_DELIM_LEN
-            if self._parsing_pos10 < 0:
-                self._parsing_pos10 = 0
+            node = self._cur.find(tag)
 
-    def _parse11(self):
+        if self._validate_reply_and_sax_tag:
+            if tag != self._root.tag:
+                self._write_buffer(tag, format_str='<{}>\n')
+                self._cur = E(tag, self._cur)
+            else:
+                self._write_buffer(tag, format_str='<{}{}>', **attributes)
+                self._cur = node
+                self._currenttag = tag
+            self._validate_reply_and_sax_tag = False
+            self._defaulttags.append(tag)
+        elif node is not None:
+            self._write_buffer(tag, format_str='<{}{}>', **attributes)
+            self._cur = node
+            self._currenttag = tag
+        elif tag == 'rpc-reply':
+            self._write_buffer(tag, format_str='<{}{}>', **attributes)
+            self._defaulttags.append(tag)
+            self._validate_reply_and_sax_tag = True
+        else:
+            self._currenttag = None
+            self._ignoretag = tag
 
-        """Messages are split into chunks. Chunks and messages are delimited
-        by the regex #RE_NC11_DELIM defined earlier in this file. Each
-        time we get called here either a chunk delimiter or an
-        end-of-message delimiter should be found iff there is enough
-        data. If there is not enough data, we will wait for more. If a
-        delimiter is found in the wrong place, a #NetconfFramingError
-        will be raised."""
+    def endElement(self, tag):
+        if self._ignoretag == tag:
+            self._ignoretag = None
 
-        self.logger.debug("_parse11: starting")
+        if tag in self._defaulttags:
+            self._write_buffer(tag, format_str='</{}>\n')
 
-        # suck in whole string that we have (this is what we will work on in
-        # this function) and initialize a couple of useful values
-        self._session._buffer.seek(0, os.SEEK_SET)
-        data = self._session._buffer.getvalue()
-        data_len = len(data)
-        start = 0
-        self.logger.debug('_parse11: working with buffer of %d bytes', data_len)
-        while True and start < data_len:
-            # match to see if we found at least some kind of delimiter
-            self.logger.debug('_parse11: matching from %d bytes from start of buffer', start)
-            re_result = RE_NC11_DELIM.match(data[start:].decode('utf-8'))
-            if not re_result:
+        elif self._cur.tag == tag:
+            self._write_buffer(tag, format_str='</{}>\n')
+            self._cur = self._cur.getparent()
 
-                # not found any kind of delimiter just break; this should only
-                # ever happen if we just have the first few characters of a
-                # message such that we don't yet have a full delimiter
-                self.logger.debug('_parse11: no delimiter found, buffer="%s"', data[start:].decode())
-                break
+        self._currenttag = None
 
-            # save useful variables for reuse
-            re_start = re_result.start()
-            re_end = re_result.end()
-            self.logger.debug('_parse11: regular expression start=%d, end=%d', re_start, re_end)
+    def characters(self, content):
+        if self._currenttag is not None:
+            self._write_buffer(content, format_str='{}')
 
-            # If the regex doesn't start at the beginning of the buffer,
-            # we're in trouble, so throw an error
-            if re_start != 0:
-                raise NetconfFramingError('_parse11: delimiter not at start of match buffer', data[start:])
+    def _write_buffer(self, content, format_str, **kwargs):
+        # print(content, format_str, kwargs)
+        self._buffer.seek(0, os.SEEK_END)
+        attrs = ''
+        for (name, value) in kwargs.items():
+            attr = ' {}={}'.format(name, quoteattr(value))
+            attrs = attrs + attr
+        data = format_str.format(content, attrs)
+        self._buffer.write(data)
 
-            if re_result.group(2):
-                # we've found the end of the message, need to form up
-                # whole message, save back remainder (if any) to buffer
-                # and dispatch the message
-                start += re_end
-                message = ''.join(self._session._message_list)
-                self._session._message_list = []
-                self.logger.debug('_parse11: found end of message delimiter')
-                self._session._dispatch_message(message)
-                break
 
-            elif re_result.group(1):
-                # we've found a chunk delimiter, and group(2) is the digit
-                # string that will tell us how many bytes past the end of
-                # where it was found that we need to have available to
-                # save the next chunk off
-                self.logger.debug('_parse11: found chunk delimiter')
-                digits = int(re_result.group(1))
-                self.logger.debug('_parse11: chunk size %d bytes', digits)
-                if (data_len-start) >= (re_end + digits):
-                    # we have enough data for the chunk
-                    fragment = textify(data[start+re_end:start+re_end+digits])
-                    self._session._message_list.append(fragment)
-                    start += re_end + digits
-                    self.logger.debug('_parse11: appending %d bytes', digits)
-                    self.logger.debug('_parse11: fragment = "%s"', fragment)
-                else:
-                    # we don't have enough bytes, just break out for now
-                    # after updating start pointer to start of new chunk
-                    start += re_start
-                    self.logger.debug('_parse11: not enough data for chunk yet')
-                    self.logger.debug('_parse11: setting start to %d', start)
-                    break
+def _get_sax_parser_root(xml):
+    """
+    This function does some validation and rule check of xmlstring
+    :param xml: string or object to be used in parsing reply
+    :return: lxml object
+    """
+    if isinstance(xml, etree._Element):
+        root = xml
+    else:
+        root = etree.fromstring(xml)
+    return root
 
-        # Now out of the loop, need to see if we need to save back any content
-        if start > 0:
-            self.logger.debug(
-                '_parse11: saving back rest of message after %d bytes, original size %d',
-                start, data_len)
-            self._session._buffer = StringIO(data[start:])
-            if start < data_len:
-                self.logger.debug('_parse11: still have data, may have another full message!')
-                self._parse11()
-        self.logger.debug('_parse11: ending')
+
+def escape(data, entities={}):
+    """Escape &, <, and > in a string of data.
+
+    You can escape other strings of data by passing a dictionary as
+    the optional entities parameter.  The keys and values must all be
+    strings; each key will be replaced with its corresponding value.
+    """
+
+    # must do ampersand first
+    data = data.replace("&", "&amp;")
+    data = data.replace(">", "&gt;")
+    data = data.replace("<", "&lt;")
+    if entities:
+        data = __dict_replace(data, entities)
+    return data
+
+
+def quoteattr(data, entities={}):
+    """Escape and quote an attribute value.
+
+    Escape &, <, and > in a string of data, then quote it for use as
+    an attribute value.  The \" character will be escaped as well, if
+    necessary.
+
+    You can escape other strings of data by passing a dictionary as
+    the optional entities parameter.  The keys and values must all be
+    strings; each key will be replaced with its corresponding value.
+    """
+    # entities = entities.copy()
+    entities.update({'\n': '&#10;', '\r': '&#13;', '\t':'&#9;'})
+    data = escape(data, entities)
+    if '"' in data:
+        if "'" in data:
+            data = '"%s"' % data.replace('"', "&quot;")
+        else:
+            data = "'%s'" % data
+    else:
+        data = '"%s"' % data
+    return data
+
+
+def __dict_replace(s, d):
+    """Replace substrings of a string using a dictionary."""
+    for key, value in d.items():
+        s = s.replace(key, value)
+    return s

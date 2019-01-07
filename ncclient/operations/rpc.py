@@ -15,6 +15,15 @@
 from threading import Event, Lock
 from uuid import uuid4
 import six
+import sys
+
+if sys.version < '3':
+    from six import StringIO
+else:
+    from io import BytesIO as StringIO
+
+from ncclient.transport.parser import SAXParser
+from xml.sax import make_parser
 
 from ncclient.xml_ import *
 from ncclient.logging_ import SessionLoggerAdapter
@@ -137,9 +146,16 @@ class RPCReply(object):
     def __repr__(self):
         return self._raw
 
-    def parse(self):
+    def parse(self, filter_xml=None):
         "Parses the *rpc-reply*."
         if self._parsed: return
+        if filter_xml is not None:
+            sax_parser = make_parser()
+            buffer = StringIO()
+            sax_parser.setContentHandler(SAXParser(filter_xml=filter_xml,
+                                                   buffer=buffer))
+            sax_parser.feed(self._raw)
+            self._raw = buffer.getvalue()
         root = self._root = to_ele(self._raw) # The <rpc-reply> element
         # Per RFC 4741 an <ok/> tag is sent when there are no errors or warnings
         ok = root.find(qualify("ok"))
@@ -197,7 +213,6 @@ class RPCReplyListener(SessionListener): # internal use
                 instance._lock = Lock()
                 instance._id2rpc = {}
                 instance._device_handler = device_handler
-                #instance._pipelined = session.can_pipeline
                 session.add_listener(instance)
                 instance.logger = SessionLoggerAdapter(logger,
                                                        {'session': session})
@@ -305,7 +320,7 @@ class RPC(object):
         ele.append(subele)
         return to_xml(ele)
 
-    def _request(self, op):
+    def _request(self, op, filter_xml=None):
         """Implementations of :meth:`request` call this method to send the request and process the reply.
 
         In synchronous mode, blocks until the reply is received and returns :class:`RPCReply`. Depending on the :attr:`raise_mode` a `rpc-error` element in the reply may lead to an :exc:`RPCError` exception.
@@ -327,7 +342,7 @@ class RPC(object):
                 if self._error:
                     # Error that prevented reply delivery
                     raise self._error
-                self._reply.parse()
+                self._reply.parse(filter_xml)
                 if self._reply.error is not None and not self._device_handler.is_rpc_error_exempt(self._reply.error.message):
                     # <rpc-error>'s [ RPCError ]
 

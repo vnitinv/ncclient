@@ -23,7 +23,6 @@ generic information needed for interaction with a Netconf server.
 
 """
 
-from ncclient.transport.parser import DefaultXMLParser
 
 import sys
 if sys.version >= '3':
@@ -226,12 +225,3 @@ class DefaultDeviceHandler(object):
     def transform_reply(self):
         return False
 
-    def get_xml_parser(self, session):
-        """
-        vendor can chose which parser to use for RPC reply response.
-        Default being DOM
-
-        :param session: ssh session object
-        :return: default DOM parser
-        """
-        return DefaultXMLParser(session)

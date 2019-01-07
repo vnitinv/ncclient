@@ -45,8 +45,7 @@ class ExecuteRpc(RPC):
     def request(self, rpc, filter_xml=None):
         if isinstance(rpc, str):
             rpc = to_ele(rpc)
-        self._filter_xml = filter_xml
-        return self._request(rpc)
+        return self._request(rpc, filter_xml)
 
 
 class Command(RPC):
@@ -117,6 +116,7 @@ class Commit(RPC):
         if check:
             sub_ele(node, "check")
         return self._request(node)
+
 
 class Rollback(RPC):
     def request(self, rollback=0):
